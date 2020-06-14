@@ -20,26 +20,33 @@ impl Context {
     pub async fn new(window: &Window) -> Self {
         let size = window.inner_size();
 
-        let surface = wgpu::Surface::create(window);
+        let instance = wgpu::Instance::new();
 
-        let adapter = wgpu::Adapter::request(
-            &wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-            },
-            wgpu::BackendBit::PRIMARY,
-        )
-        .await
-        .unwrap();
+        let surface = unsafe { instance.create_surface(window) };
+
+        let adapter = instance
+            .request_adapter(
+                &wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: Some(&surface),
+                },
+                wgpu::UnsafeExtensions::disallow(),
+                wgpu::BackendBit::PRIMARY,
+            )
+            .await
+            .unwrap();
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                extensions: wgpu::Extensions {
-                    anisotropic_filtering: false,
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    extensions: wgpu::Extensions::empty(),
+                    limits: wgpu::Limits::default(),
+                    shader_validation: true,
                 },
-                limits: Default::default(),
-            })
-            .await;
+                None,
+            )
+            .await
+            .unwrap();
 
         let sc_desc = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
@@ -169,6 +176,7 @@ impl InterfacePass {
                         binding: 0,
                         visibility: wgpu::ShaderStage::VERTEX,
                         ty: wgpu::BindingType::UniformBuffer { dynamic: false },
+                        ..Default::default()
                     }],
                 });
 
@@ -177,10 +185,9 @@ impl InterfacePass {
             layout: &uniforms_bind_group_layout,
             bindings: &[wgpu::Binding {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer {
-                    buffer: &uniforms,
-                    range: 0..(std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress),
-                },
+                resource: wgpu::BindingResource::Buffer(
+                    uniforms.slice(0..std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress),
+                ),
             }],
         });
 
@@ -250,8 +257,9 @@ impl InterfacePass {
 
         let frame = ctx
             .swap_chain
-            .get_next_texture()
-            .expect("Timeout getting texture");
+            .get_next_frame()
+            .expect("Timeout getting texture")
+            .output;
 
         let mut encoder = ctx
             .device
@@ -276,12 +284,12 @@ impl InterfacePass {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.uniforms_bind_group, &[]);
-            pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
-            pass.set_index_buffer(&index_buffer, 0, 0);
+            pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            pass.set_index_buffer(index_buffer.slice(..));
             pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
         }
 
-        ctx.queue.submit(&[encoder.finish()]);
+        ctx.queue.submit(Some(encoder.finish()));
     }
 }
 
